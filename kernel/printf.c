@@ -132,3 +132,14 @@ printfinit(void)
   initlock(&pr.lock, "pr");
   pr.locking = 1;
 }
+
+void backtrace(void) 
+{
+  printf("backtrace:\n");
+  
+  uint64 fp = r_fp();
+  while(PGROUNDDOWN(fp) != PGROUNDUP(fp)) { // 每个栈最终都回到0x----000,此时二者相等。
+    printf("%p\n",*(uint64*)(fp-8)); //返回地址
+    fp = *(uint64*)(fp-16);// 上一个栈帧的fp
+  }
+}
