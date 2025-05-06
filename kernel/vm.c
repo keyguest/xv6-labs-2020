@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -311,7 +313,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
+  // char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -319,19 +321,29 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
+    
+
+    if(*pte & PTE_W)
+      *pte =(*pte & (~PTE_W)) | PTE_COW; // 不能够写
+
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    // if((mem = kalloc()) == 0)
+    //   goto err;
+    // memmove(mem, (char*)pa, PGSIZE);
+    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
+      // 共享页面计数减减即可
+      // kfree(mem);
       goto err;
     }
+
+    // 共享页面引用数+1
+    krefpage((void*)pa);
   }
   return 0;
 
  err:
-  uvmunmap(new, 0, i / PGSIZE, 1);
+  // 对应共享页面的计数减减即可
+  // uvmunmap(new, 0, i / PGSIZE, 1);
   return -1;
 }
 
@@ -358,6 +370,11 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+
+    if(cow_uvmallocflag(va0))  {
+      cow_uvmcopy(va0);
+    }
+
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
@@ -439,4 +456,46 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+// cow写时复制条件判断
+int
+cow_uvmallocflag(uint64 va) {
+  // 判断是否满足写时复制的条件
+  struct proc* p = myproc();
+  pte_t* pte;
+  return va < p->sz 
+  && (pte = walk(p->pagetable,va, 0))!=0 
+  && ((*pte & PTE_V)) //进行对应的判断
+  && ((*pte & PTE_COW));
+}
+
+// 对对应的虚拟地址拷贝旧页面
+void
+cow_uvmcopy(uint64 va) {
+  struct proc* p = myproc();
+  pte_t *pte;
+  uint64 pa;
+  uint flags;
+  char* mem;
+  va = PGROUNDDOWN(va);
+  // 找到原来的物理地址
+  if((pte = walk(p->pagetable,va, 0)) == 0)
+    panic("cow_uvmcopy: pte should exist");
+  if((*pte & PTE_V) == 0) 
+    panic("cow_uvmcopy: page not present");
+  pa = PTE2PA(*pte);
+  flags = PTE_FLAGS(*pte);  
+  flags |= PTE_W;// 可以进行写
+  flags &= ~PTE_COW;
+  if((mem = kcopy_n_deref((void*)pa)) == 0){ // 没有内存能够被分配(采用新的分配函数，进行相应分配)
+    p->killed = 1; // 直接杀死进程
+    return;
+  }
+  uvmunmap(p->pagetable, va, 1, 0);
+  if(mappages(p->pagetable, va, 1, (uint64)mem, flags) != 0) {
+    panic("cow_uvmcopy: mappages");
+  }
+  return;
+
 }
