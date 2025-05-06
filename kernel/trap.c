@@ -80,9 +80,9 @@ usertrap(void)
   if(which_dev == 2){
     p->tick_num++;// 处理警告函数
     if(p->tick_num == p->alarm_interval && p->alarm_interval!=0) {
-      *p->alarm_trapframe = *p->trapframe;
-      p->trapframe->epc = (uint64) p->alarm_function;
-      // ((void(*)())p->alarm_function)();
+      *p->alarm_trapframe = *p->trapframe;//存储原来状态。
+      p->trapframe->epc = (uint64) p->alarm_function; // 相当于在返回用户态的时候直接跳转到对应函数底下执行，在函数底下有个sigreturen，能够将其状态进行返回，从而回到对应指令底下执行。
+      // ((void(*)())p->alarm_function)(); //这里调用的是用户态的函数因此会被禁止（页表被写入U的权限）
       p->tick_num = 0; // 重置
     }
     yield();
