@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -167,6 +169,26 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   return 0;
 }
 
+// 创建不带有效位的映射
+void
+lazy_uvmalloc(uint64 va)
+{
+  struct proc *p = myproc();
+  char *mem = kalloc();
+  if(mem == 0) {
+    printf("lazy alloc: out of memory\n");
+    p->killed = 1;
+  }else{
+    memset(mem, 0, PGSIZE);
+    va = PGROUNDDOWN(va);
+    if(mappages(p->pagetable, va, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
+      printf("lazy alloc: failed to map page\n");
+      kfree(mem);
+      p->killed = 1;
+    }
+  }
+}
+
 // Remove npages of mappings starting from va. va must be
 // page-aligned. The mappings must exist.
 // Optionally free the physical memory.
@@ -180,10 +202,10 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     panic("uvmunmap: not aligned");
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
-    if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+    if((pte = walk(pagetable, a, 0)) == 0) continue;
+      // panic("uvmunmap: walk");
+    if((*pte & PTE_V) == 0) continue;
+      // panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
@@ -314,10 +336,11 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
+    if((pte = walk(old, i, 0)) == 0) continue;
+      // panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+      continue;
+      // panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
@@ -356,9 +379,22 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
 
+  // if(lazy_uvmallocflag(dstva)) {
+  //   lazy_uvmalloc(dstva);
+  // }
+
+
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+
+    if(lazy_uvmallocflag(va0)) {
+      lazy_uvmalloc(va0);
+    }
+
     pa0 = walkaddr(pagetable, va0);
+
+
+
     if(pa0 == 0)
       return -1;
     n = PGSIZE - (dstva - va0);
@@ -381,9 +417,21 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
   uint64 n, va0, pa0;
 
+  
+  // if(lazy_uvmallocflag(srcva)) {
+  //   lazy_uvmalloc(srcva);
+  // }
+
   while(len > 0){
     va0 = PGROUNDDOWN(srcva);
+    if(lazy_uvmallocflag(va0)) {
+      lazy_uvmalloc(va0);
+    }
+
     pa0 = walkaddr(pagetable, va0);
+
+
+
     if(pa0 == 0)
       return -1;
     n = PGSIZE - (srcva - va0);
@@ -439,4 +487,41 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+
+void vmprint_dfs(pagetable_t pagetable, int step) {
+  if(step == 4) return;
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if(pte & PTE_V){
+      // this PTE points to a lower-level page table.
+      uint64 child = PTE2PA(pte);
+      for(int j = 0;j < step;j++)  {
+        if(j != step - 1) printf(".. ");
+        else printf("..");
+      }
+      printf("%d: pte %p pa %p\n", i, pte, child);
+      vmprint_dfs((pagetable_t)child,step+1);
+    } 
+  }
+}
+
+
+void
+vmprint(pagetable_t pagetable){
+  printf("page table %p\n",pagetable);
+  // there are 2^9 = 512 PTEs in a page table.
+  vmprint_dfs(pagetable, 1);
+  return;
+}
+
+int 
+lazy_uvmallocflag(uint64 va) {
+  struct proc* p = myproc();
+  pte_t* pte;
+  return va < p->sz 
+  // && PGROUNDUP(va) != r_sp()
+  && PGROUNDUP(p->trapframe->sp) - 1 < va
+  && (((pte = walk(p->pagetable,va,0)) == 0) || ((*pte & PTE_V) == 0));
 }

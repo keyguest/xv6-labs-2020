@@ -47,8 +47,21 @@ sys_sbrk(void)
   if(argint(0, &n) < 0)
     return -1;
   addr = myproc()->sz;
-  if(growproc(n) < 0)
+  struct proc *p = myproc(); // 获取进程
+  
+  // if(growproc(n) < 0)
+  //   return -1;
+
+  // 分配内存进行懒加载，删除内存则直接删除。
+  if(n > 0){
+    p->sz += n;
+  } else if(p->sz + n > 0){
+    p->sz = uvmdealloc(p->pagetable, addr, addr + n);
+  } else 
     return -1;
+
+  // printf("pid = %d; old = %dKB; new = %dKB\n",p->pid ,(p->sz - n)/1024, (p-> sz)/1024);
+
   return addr;
 }
 

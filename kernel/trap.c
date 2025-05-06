@@ -67,10 +67,37 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->killed = 1;
+  }
+  // else if(r_scause() == 13 || r_scause() == 15){
+  //   // 处理页错误问题
+  //   uint64 va = r_stval;
+    // char *mem = 0;
+    // uint64 va =  r_stval();
+    // mem = kalloc();
+    // if(PGROUNDUP(p->trapframe->sp) - 1 < va && va < p->sz &&  mem != 0){
+    // // if(mem != 0){
+    //   memset(mem, 0, PGSIZE);
+    //   va = PGROUNDDOWN(va);
+    //   if(mappages(p->pagetable, va, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
+    //     kfree(mem);
+    //     p->killed = 1;
+    //   }
+    // }else p->killed = 1;
+    
+    // printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+    // printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+
+    // vmprint(p->pagetable);
+  // } 
+  else {
+    uint64 va = r_stval();
+    if((r_scause() == 13 || r_scause() == 15) && lazy_uvmallocflag(va)) {
+        lazy_uvmalloc(va);
+    }else {
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+    }
   }
 
   if(p->killed)

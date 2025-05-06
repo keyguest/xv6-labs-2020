@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "*.S": "asm",
+        "*.s": "asm",
+        "defs.h": "c"
+    }
+}

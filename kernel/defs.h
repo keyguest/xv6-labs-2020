@@ -171,6 +171,10 @@ uint64          walkaddr(pagetable_t, uint64);
 int             copyout(pagetable_t, uint64, char *, uint64);
 int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
+void            lazy_uvmalloc(uint64); // 懒加载映射分配
+void            vmprint_dfs(pagetable_t, int);
+void            vmprint(pagetable_t);
+int             lazy_uvmallocflag(uint64);
 
 // plic.c
 void            plicinit(void);
