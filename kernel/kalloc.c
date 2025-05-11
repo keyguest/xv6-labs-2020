@@ -18,15 +18,34 @@ struct run {
   struct run *next;
 };
 
+// struct {
+//   struct spinlock lock;
+//   struct run *freelist;
+// } kmem;
+char* kmem_lock_names[] = {
+  "kmem_cpu0",
+  "kmem_cpu1",
+  "kmem_cpu2",
+  "kmem_cpu3",
+  "kmem_cpu4",
+  "kmem_cpu5",
+  "kmem_cpu6",
+  "kmem_cpu7",
+};
+
+
 struct {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+} kmem[NCPU]; //为每个CPU分配空闲链表
+
 
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
+  for(int i=0;i<NCPU;i++){
+    initlock(&kmem[i].lock, kmem_lock_names[i]);
+  }
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -56,10 +75,14 @@ kfree(void *pa)
 
   r = (struct run*)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  push_off();
+  int id = cpuid();
+  acquire(&kmem[id].lock);
+  r->next = kmem[id].freelist;
+  kmem[id].freelist = r;
+  release(&kmem[id].lock);
+
+  pop_off(); // 防止中断使得获取的CPU ID不一致（中断切换进程，然后另一个cpu调用了这个进程）
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -69,12 +92,39 @@ void *
 kalloc(void)
 {
   struct run *r;
-
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+  int id;
+  push_off();
+  id = cpuid();
+  if(kmem[id].freelist){
+    acquire(&kmem[id].lock);
+    r = kmem[id].freelist;
+    if(r)
+      kmem[id].freelist = r->next;
+    release(&kmem[id].lock);
+  } else {
+    
+    for(int i=0;i<NCPU;i++){
+      if(i==id)
+        continue;
+      if(id>i) {
+        acquire(&kmem[i].lock);
+        acquire(&kmem[id].lock);
+      } else {
+        acquire(&kmem[id].lock);
+        acquire(&kmem[i].lock);
+      } // 处理死锁问题，通过id的大小来决定锁的顺序
+      r = kmem[i].freelist;
+      if(r){
+        kmem[i].freelist = r->next;
+        release(&kmem[i].lock);
+        release(&kmem[id].lock);
+        break;
+      }
+      release(&kmem[i].lock);
+      release(&kmem[id].lock);
+    }
+  }
+  pop_off();
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
