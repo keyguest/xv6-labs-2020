@@ -304,11 +304,31 @@ sys_open(void)
       return -1;
     }
   } else {
-    if((ip = namei(path)) == 0){
+
+    int depth = 0;
+    for(depth = 0; depth < 10; depth++){
+      if((ip = namei(path)) == 0){ // 通过路径名获取对应的inode
+        end_op();
+        return -1;
+      }
+      ilock(ip);
+
+      if(ip->type == T_SYMLINK && (omode & O_NOFOLLOW) == 0){ // 如果还是符号链接
+        if(readi(ip, 0, (uint64)path, 0, MAXPATH) < 0){ // 读取符号链接的内容
+          iunlockput(ip);
+          end_op();
+          return -1;
+        }
+        iunlockput(ip); // 解锁准备下一次读取
+      }else
+        break;
+    }
+
+    if(depth == 10) {
       end_op();
       return -1;
     }
-    ilock(ip);
+    
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
@@ -482,5 +502,33 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+
+int sys_symlink(void)
+{
+  char target[MAXPATH], path[MAXPATH];
+  struct inode *ip;
+
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0) // 获取参数
+    return -1;
+
+  // 创建一个链接文件
+  begin_op();
+  ip = create(path, T_SYMLINK, 0, 0); // 创建会对ip加锁
+  if(ip == 0){
+    end_op();
+    return -1;
+  }
+
+  if(writei(ip, 0, (uint64)target, 0, sizeof(target)) != sizeof(target)){
+    end_op();
+    return -1;
+  }
+
+  iunlockput(ip);// 释放 inode，在最后进行对应的解锁，表示初始化完毕
+  end_op();
+  
   return 0;
 }

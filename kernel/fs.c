@@ -380,6 +380,8 @@ bmap(struct inode *ip, uint bn)
   uint addr, *a;
   struct buf *bp;
 
+  // printf("bmap: bn = %d\n", bn);
+
   if(bn < NDIRECT){
     if((addr = ip->addrs[bn]) == 0)
       ip->addrs[bn] = addr = balloc(ip->dev);
@@ -401,6 +403,30 @@ bmap(struct inode *ip, uint bn)
     return addr;
   }
 
+  // 分配二级间接块
+  bn -= NINDIRECT;
+  if(bn < NINDIRECT*NINDIRECT){
+    if((addr = ip->addrs[NDIRECT+1]) == 0) // 分配一个二级间接块
+      ip->addrs[NDIRECT+1] = addr = balloc(ip->dev); //分配一个空间
+    bp = bread(ip->dev, addr); // 读取二级间接块
+    a = (uint*)bp->data; // 读取二级间接块的内容
+    if((addr = a[bn/NINDIRECT]) == 0){ // 分配一个一级间接块
+      a[bn/NINDIRECT] = addr = balloc(ip->dev); //分配一个空间,拿到一级间接块的地址
+      log_write(bp); // 写入二级间接块
+    }
+    brelse(bp); // 释放二级间接块
+
+    // 读取一级间接块
+    bp = bread(ip->dev, addr); // 读取一级间接块
+    a = (uint*)bp->data; // 读取一级间接块的内容
+    if((addr = a[bn%NINDIRECT]) == 0){ //如果一级间接块对应内容为空，则分配一个数据块
+      a[bn%NINDIRECT] = addr = balloc(ip->dev); //分配一个空间,拿到数据块的地址
+      log_write(bp); // 写入一级间接块
+    }
+    brelse(bp); // 释放一级间接块
+    return addr; // 返回数据块的地址
+  }
+
   panic("bmap: out of range");
 }
 
@@ -410,8 +436,8 @@ void
 itrunc(struct inode *ip)
 {
   int i, j;
-  struct buf *bp;
-  uint *a;
+  struct buf *bp, *bp1;
+  uint *a, *a1;
 
   for(i = 0; i < NDIRECT; i++){
     if(ip->addrs[i]){
@@ -430,6 +456,29 @@ itrunc(struct inode *ip)
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
+  }
+
+  if(ip->addrs[NDIRECT+1]){
+    // 读取对应的二级间接块
+    bp = bread(ip->dev, ip->addrs[NDIRECT+1]);
+    a = (uint*)bp->data; // 读取二级间接块的内容
+    for(j = 0; j < NINDIRECT; j++) {
+      if(a[j]){ // 存在一级简介块不为空
+        // 读取一级块
+        bp1 = bread(ip->dev, a[j]); // 读取一级间接块
+        a1 = (uint*)bp1->data; // 读取一级间接块的内容
+        for(i = 0; i < NINDIRECT; i++) { // 遍历一级间接块
+          if(a1[i]) // 一级间接块对应内容不为空
+            bfree(ip->dev, a1[i]); // 释放数据块
+        }
+        brelse(bp1); // 释放一级间接块
+        bfree(ip->dev, a[j]); // 释放一级间接块
+        a[j] = 0; // 清空一级间接块 
+      }
+    }
+    brelse(bp); // 释放二级间接块
+    bfree(ip->dev, ip->addrs[NDIRECT+1]); // 释放二级间接块
+    ip->addrs[NDIRECT+1] = 0; // 清空二级间接块
   }
 
   ip->size = 0;
