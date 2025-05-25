@@ -102,7 +102,32 @@ e1000_transmit(struct mbuf *m)
   // the TX descriptor ring so that the e1000 sends it. Stash
   // a pointer so that it can be freed after sending.
   //
+
+  acquire(&e1000_lock);// 加锁
+
+  uint32 idx = regs[E1000_TDT]; // 获取下一个可用索引,从网卡寄存器中拿到尾指针
+  struct tx_desc *desc = &tx_ring[idx]; // 获取当前描述符，获取尾巴处的描述符
+
+  if((desc ->status & E1000_TXD_STAT_DD) == 0) { // 还没完成之前的传输请求，看看这个指针处是否空闲
+    release(&e1000_lock); // 释放锁
+    return -1; // TX descriptor not ready
+  }
+
+  if(tx_mbufs[idx]) { // 释放之前的mbuf，说明这个位置之前分配过数据
+    mbuffree(tx_mbufs[idx]);
+    tx_mbufs[idx] = 0;
+  }
+  // 设置描述符的一些信息
+  desc->addr = (uint64)m->head; // 设置描述符地址， 设置网卡 DMA 从哪里读取数据
+  desc->length = m->len; // 设置描述符长度，以太网帧长度
+  desc->cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS; // 设置命令
+  // 设置完，即可等待硬件发送
+  tx_mbufs[idx] = m; // 保存mbuf指针，也就是保存这个数据包的指针，网卡通过desc描述符，找到对应的缓冲区位置，然后开始发送buf数据。
+
+  // 更新发送描述符尾指针
+  regs[E1000_TDT] = (idx + 1) % TX_RING_SIZE; // 更新发送描述符尾指针，循环队列
   
+  release(&e1000_lock); // 释放锁
   return 0;
 }
 
@@ -115,6 +140,29 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver an mbuf for each packet (using net_rx()).
   //
+
+  // 循环检查接收描述符中的数据包
+  while(1) {
+    uint32 idx = (regs[E1000_RDT] + 1) % RX_RING_SIZE; // 获取下一个接收描述符索引
+    struct rx_desc *desc = &rx_ring[idx]; // 获取当前接收描述符
+
+    if((desc->status & E1000_RXD_STAT_DD) == 0) { // 如果没有数据包到达
+      break; // 退出循环
+    }
+
+    rx_mbufs[idx]->len = desc->length; // 设置mbuf长度，DMA最终会将数据包放在mbuf中
+
+    net_rx(rx_mbufs[idx]); // 处理接收到的mbuf
+
+    rx_mbufs[idx] = mbufalloc(0); // 重置mbuf长度
+    desc->addr = (uint64)rx_mbufs[idx]->head; // 设置接收描述符地址
+    desc->status = 0; // 设置接收描述符长度
+
+    regs[E1000_RDT] = idx; // 更新接收描述符尾指针
+  }
+
+
+
 }
 
 void
