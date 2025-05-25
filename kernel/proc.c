@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -134,6 +135,10 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  //初始化
+  for(int i = 0; i < NVMA; i++){
+    p->vmas[i].valid = 0;
+  }
   return p;
 }
 
@@ -146,6 +151,12 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+
+  for(int i = 0; i < NVMA; i++){
+    struct vma *v = &p->vmas[i];
+    vmaunmap(p->pagetable, v->addr, v->sz, v);
+  }
+
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
@@ -156,6 +167,7 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+
   p->state = UNUSED;
 }
 
@@ -296,6 +308,16 @@ fork(void)
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
+  // 父进程vmas复制到子进程。
+  for(int i = 0; i < NVMA; i++){
+    struct vma *v = &p->vmas[i];
+    if(v->valid){
+      np->vmas[i] = *v;
+      filedup(v->f); // 引用计数++
+    }
+  }
+
+
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
@@ -352,6 +374,18 @@ exit(int status)
       p->ofile[fd] = 0;
     }
   }
+
+  //   // 将进程的已映射区域取消映射
+  // for(int i = 0; i < NVMA; ++i) {
+  //   if(p->vmas[i].valid) {
+  //     if(p->vmas[i].flags == MAP_SHARED && (p->vmas[i].prot & PROT_WRITE) != 0) {
+  //       filewrite(p->vmas[i].f, p->vmas[i].addr, p->vmas[i].sz);
+  //     }
+  //     fileclose(p->vmas[i].f);
+  //     uvmunmap(p->pagetable, p->vmas[i].addr, p->vmas[i].sz / PGSIZE, 1);
+  //     p->vmas[i].valid = 0;
+  //   }
+  // }
 
   begin_op();
   iput(p->cwd);
@@ -597,8 +631,12 @@ void
 wakeup(void *chan)
 {
   struct proc *p;
-
   for(p = proc; p < &proc[NPROC]; p++) {
+    if(holding(&p->lock)){
+      printf("%d %s %s\n", p->pid, p->name, (struct spinlock *)(&p->lock)->name);
+      panic("wakeup111111111111");    
+    }
+      
     acquire(&p->lock);
     if(p->state == SLEEPING && p->chan == chan) {
       p->state = RUNNABLE;

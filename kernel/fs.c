@@ -486,6 +486,7 @@ readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
 int
 writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
 {
+
   uint tot, m;
   struct buf *bp;
 
@@ -495,7 +496,9 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
     return -1;
 
   for(tot=0; tot<n; tot+=m, off+=m, src+=m){
+
     bp = bread(ip->dev, bmap(ip, off/BSIZE));
+
     m = min(n - tot, BSIZE - off%BSIZE);
     if(either_copyin(bp->data + (off % BSIZE), user_src, src, m) == -1) {
       brelse(bp);
@@ -503,6 +506,7 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
     }
     log_write(bp);
     brelse(bp);
+
   }
 
   if(off > ip->size)

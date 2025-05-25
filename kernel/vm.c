@@ -5,7 +5,11 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
-
+#include "spinlock.h"
+#include "proc.h"
+#include "fcntl.h"
+#include "sleeplock.h"
+#include "file.h"
 /*
  * the kernel's page table.
  */
@@ -428,4 +432,45 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+void vmaunmap(pagetable_t pagetable, uint64 va, uint64 nbytes, struct vma* v) 
+{
+  // 根据页表，（根据vma查询对应的虚拟地址空间，不用查了），在通过页表找到对应的物理块
+  // 判断是否写回，然后利用vma中的文件信息将其写回。
+  // 最后释放物理块,解除映射
+  uint64 a;
+  pte_t *pte;
+
+  // if((va % PGSIZE) != 0) // 判断是否对齐
+  //   panic("vmaunmap: not aligned");
+
+  for(a = va; a < va + nbytes; a += PGSIZE){
+      if((pte = walk(pagetable, a, 0)) == 0)
+        continue;
+      if(PTE_FLAGS(*pte) == PTE_V)
+        panic("vmaunmap: not a leaf");
+
+      if(*pte & PTE_V){
+        // printf("11111111111111111vmaunmap: %p\n", *pte);
+        uint64 pa = PTE2PA(*pte); // 当前是内核页表，因此MMU中不是对应的地址
+        if((*pte & PTE_D) && (v->flags & MAP_SHARED)){ // 判断是否是写入
+          begin_op();
+          ilock(v->f->ip);
+          uint64 start = a - v->addr; // 计算偏移量
+          
+          if(start < 0) 
+            writei(v->f->ip, 0, pa + (-start), v->offset, PGSIZE + start); // 写入文件
+          else if(start + PGSIZE > v->sz)
+            writei(v->f->ip, 0, pa, v->offset + start, v->sz - start); // 写入文件
+          else 
+            writei(v->f->ip, 0, pa, v->offset + start, PGSIZE); // 写入文件
+
+          iunlock(v->f->ip);
+          end_op();
+        }
+        kfree((void*)pa);
+        *pte = 0;
+      }
+    }
 }

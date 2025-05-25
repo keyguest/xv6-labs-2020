@@ -116,12 +116,13 @@ bwrite(struct buf *b)
 void
 brelse(struct buf *b)
 {
+
   if(!holdingsleep(&b->lock))
     panic("brelse");
-
   releasesleep(&b->lock);
 
   acquire(&bcache.lock);
+
   b->refcnt--;
   if (b->refcnt == 0) {
     // no one is waiting for it.
@@ -134,6 +135,7 @@ brelse(struct buf *b)
   }
   
   release(&bcache.lock);
+
 }
 
 void

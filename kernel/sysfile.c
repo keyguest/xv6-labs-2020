@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "memlayout.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -484,3 +485,144 @@ sys_pipe(void)
   }
   return 0;
 }
+
+
+uint64
+sys_mmap(void)
+{
+  uint64 addr, length, offset;
+  int flags, i;
+  int fd, prot;
+  struct file *f;
+
+  if(argaddr(0, &addr) < 0 || argaddr(1, &length) < 0 || argint(2, &prot) < 0)
+    return -1;
+  if(argint(3, &flags) < 0 || argfd(4, &fd, &f) < 0 || argaddr(5, &offset) < 0 || length <= 0)
+    return -1;
+
+  if(((!f->writable && (prot & PROT_WRITE)) && !(flags & MAP_PRIVATE) )||
+     ((!f->readable) && (prot & PROT_READ))){
+    return -1; // 共享映射不支持写入
+  }
+
+  length = PGROUNDUP(length); // 向上取整到页大小
+  struct proc *p = myproc(); // 获取进程
+  struct vma *v = 0;
+  uint64 vaend = MMAPEND; // 结束地址 随便找了个位置存放内容（找了进程页的最后一部分来存放内容）
+  // if(length > MAXVA || length < 0){
+  //   return -1;
+  // }
+  
+  
+
+  for(i = 0; i < NVMA; i ++){
+    struct vma *vv = &p->vmas[i];
+    if(vv->valid == 0){ // 找到一个空闲的vma
+      if(v == 0) {
+        v = &p->vmas[i];
+        v->valid = 1;
+      }
+    }else if(vv->addr < vaend){ // 找到一个空闲的vma
+      vaend = PGROUNDDOWN(vv->addr);// 所以每次找页都找最小的，因为地址向下增长。
+    }
+  }
+  if(v == 0){
+    panic("mmap: vma is full");
+  }
+
+  v->addr = vaend - length; // length 为页的整数倍，相当于向小的地方增长页
+  v->sz = length;
+  v->f = f; // 复制文件描述符
+  v->prot = prot;
+  v->flags = flags;
+  v->offset = offset;
+
+  filedup(v->f); // 复制文件描述符
+
+  return v->addr; // 返回映射的地址
+
+}
+
+struct vma*
+findvma(struct proc *p, uint64 va) {
+  for(int i = 0; i < NVMA; i++){ // 遍历虚拟内存区域
+    struct vma *vv = &p->vmas[i];
+    if(vv->valid == 1 && vv->addr <= va && vv->addr + vv->sz > va){
+      return vv;
+    }
+  }
+  return 0;
+}
+
+uint64
+sys_munmap(void)
+{
+  // 取消映射，如果带有标志MAP_SHARED，则需要将文件内容写回到文件中
+  // 如果没有标志MAP_SHARED，则直接取消映射
+  
+  // printf("sys_munmap not implemented\n");
+  uint64 addr, sz;  
+  if(argaddr(0, &addr) < 0 || argaddr(1, &sz) < 0 || sz == 0) // 获取参数
+      return -1; 
+  
+  struct proc *p = myproc();
+  struct vma *v = findvma(p, addr);// 查找虚拟内存区域  va一定大于起始位置
+  if(v == 0)
+    return -1; // 没有找到虚拟内存区域
+
+  if(addr > v->addr && addr + sz < v->addr + v->sz){
+      return -1; // 不能在中间打洞
+  }
+
+  uint64 va_alined = addr; 
+  // 释放一定是按页边释放
+  // 1.va等于开始位置，则就是要将开头的几块释放了
+  // 2.va大于开始位置，则就是要将结尾的几块释放了
+  if(addr > v->addr){
+    va_alined = PGROUNDUP(addr); // 向上取整到页大小
+  }
+  int leave = sz - (va_alined - addr); // 计算剩余的长度
+  if(leave < 0)
+    leave = 0; // 剩余长度小于0，则不释放
+  
+  vmaunmap(p->pagetable, va_alined, leave, v); // 取消映射 todo
+
+  if(addr <= v->addr && addr+ sz > v->addr){ // 起始位置改变
+    v->offset += addr + sz - v->addr; // 更新偏移量
+    v->addr = addr + sz; // 更新起始位置
+  }
+  v->sz -= sz; // 更新大小
+
+  if(v->sz <= 0){ // 如果大小小于等于0，则释放
+    fileclose(v->f); // 关闭文件
+    v->valid = 0; // 标记为无效
+  }
+  return 0;
+}
+
+
+
+int vmaalloc(uint64 va) { // 传入的是虚拟地址，但是缺发现没有对应的物理映射，需要分配
+  struct proc *p = myproc();
+  struct vma *v = findvma(p, va);// 查找虚拟内存区域
+  if(v == 0)
+    return 0;
+  // 根据文件信息分配页
+  void* pa = kalloc();// 分配物理页
+  if(pa == 0)
+    panic("vmaalloc: kalloc failed");
+  memset(pa, 0, PGSIZE);
+
+  begin_op();
+  ilock(v->f->ip); // 锁定文件
+  readi(v->f->ip, 0, (uint64)pa, v->offset + PGROUNDDOWN(va - v->addr), PGSIZE); // 读取文件内容到物理页
+  iunlock(v->f->ip); // 解锁文件
+  end_op();
+
+  if(mappages(p->pagetable, va, PGSIZE, (uint64)pa, PTE_R | PTE_W | PTE_U) < 0){
+    panic("vmaalloc: mappages failed");
+  }
+  return 1;
+
+}
+

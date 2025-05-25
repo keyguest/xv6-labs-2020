@@ -82,6 +82,20 @@ struct trapframe {
 
 enum procstate { UNUSED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+// 定义虚拟内存区域vma
+struct vma {
+  int valid; // 是否有效
+  uint64 addr;   // 区域起始地址
+  uint64 sz; // 区域大小
+  struct file *f; // 文件
+  int prot; // 权限   
+  int flags; // 标志
+  int offset; // 偏移量
+
+};
+
+#define NVMA 16 // 最大虚拟内存区域数
+
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -103,4 +117,5 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  struct vma vmas[NVMA];       // 虚拟内存区域
 };

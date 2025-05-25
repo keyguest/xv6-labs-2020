@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "*.S": "asm",
+        "*.s": "asm",
+        "proc.h": "c",
+        "sleeplock.h": "c"
+    }
+}

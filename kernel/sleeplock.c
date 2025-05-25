@@ -33,6 +33,7 @@ acquiresleep(struct sleeplock *lk)
 void
 releasesleep(struct sleeplock *lk)
 {
+  // printf("%s %d %s\n", lk->name, myproc()->pid, (struct spinlock *)(&lk->lk)->name);
   acquire(&lk->lk);
   lk->locked = 0;
   lk->pid = 0;

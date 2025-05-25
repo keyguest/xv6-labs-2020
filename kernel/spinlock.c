@@ -22,8 +22,12 @@ void
 acquire(struct spinlock *lk)
 {
   push_off(); // disable interrupts to avoid deadlock.
-  if(holding(lk))
+  // printf("acquire: holding %s\n", lk->name);
+  if(holding(lk)){
+    printf("acquire: holding %s %d\n", lk->name, myproc()->pid);  
     panic("acquire");
+  }
+    
 
   // On RISC-V, sync_lock_test_and_set turns into an atomic swap:
   //   a5 = 1
